@@ -1,0 +1,45 @@
+name: Auto Merge after CodeQL
+
+on:
+  workflow_run:
+    workflows: ["CodeQL Advanced"]
+    types:
+      - completed
+
+jobs:
+  automerge:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get PR info
+        id: get-pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const headBranch = context.payload.workflow_run.head_branch;
+
+            const prs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${headBranch}`,
+              state: 'open'
+            });
+
+            if (prs.data.length === 0) {
+              console.log(`🔍 No open pull request found for branch: ${headBranch}. Skipping auto-merge.`);
+              core.setOutput("should_merge", "false");
+            } else {
+              const pr = prs.data[0];
+              console.log(`✅ Found PR #${pr.number}`);
+              core.setOutput("should_merge", "true");
+              core.setOutput("pr_number", pr.number);
+            }
+
+      - name: Enable Auto-Merge
+        if: steps.get-pr.outputs.should_merge == 'true'
+        uses: peter-evans/enable-pull-request-automerge@v3
+        with:
+          token: ${{ secrets.BOT_PAT }}
+          pull-request-number: ${{ steps.get-pr.outputs.pr_number }}
+          merge-method: squash
