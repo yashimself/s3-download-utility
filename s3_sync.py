@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 
 import os
-import platform
-import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Optional, Tuple
 
+import boto3
+from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, TextColumn
+from rich.progress import BarColumn, Progress, TextColumn, TransferSpeedColumn
 
 # Initialize Rich console
 console = Console()
@@ -37,239 +36,9 @@ def run_with_sudo() -> None:
             sys.exit(1)
 
 
-def get_os_type() -> str:
-    """Get the operating system type."""
-    system = platform.system().lower()
-    if system == "darwin":
-        return "macos"
-    elif system == "linux":
-        # Try to determine the Linux distribution
-        try:
-            with open("/etc/os-release") as f:
-                content = f.read().lower()
-                if "ubuntu" in content or "debian" in content:
-                    return "ubuntu"
-                elif "fedora" in content or "rhel" in content or "centos" in content:
-                    return "fedora"
-        except FileNotFoundError:
-            pass
-        return "linux"
-    elif system == "windows":
-        return "windows"
-    return system
-
-
 def get_home_dir() -> str:
     """Get the user's home directory."""
     return os.path.expanduser("~")
-
-
-def check_and_install_unzip() -> None:
-    """Check if unzip is installed and install it if not."""
-    if shutil.which("unzip") is None:
-        console.print("[yellow]unzip utility not found. Installing...[/yellow]")
-        os_type = get_os_type()
-
-        try:
-            if os_type == "ubuntu":
-                subprocess.run(
-                    ["apt-get", "update"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=True,
-                )
-                subprocess.run(
-                    ["apt-get", "install", "-y", "unzip"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=True,
-                )
-            elif os_type == "fedora":
-                subprocess.run(
-                    ["dnf", "install", "-y", "unzip"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=True,
-                )
-            else:
-                # Generic Linux installation
-                try:
-                    # Try apt first (Debian/Ubuntu)
-                    subprocess.run(
-                        ["apt-get", "update"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        check=True,
-                    )
-                    subprocess.run(
-                        ["apt-get", "install", "-y", "unzip"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        check=True,
-                    )
-                except subprocess.CalledProcessError:
-                    try:
-                        # Try dnf (Fedora/RHEL)
-                        subprocess.run(
-                            ["dnf", "install", "-y", "unzip"],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            check=True,
-                        )
-                    except subprocess.CalledProcessError:
-                        try:
-                            # Try yum (older RHEL/CentOS)
-                            subprocess.run(
-                                ["yum", "install", "-y", "unzip"],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                                check=True,
-                            )
-                        except subprocess.CalledProcessError:
-                            console.print(
-                                "[red]Failed to install unzip. Please install it manually.[/red]"
-                            )
-                            sys.exit(1)
-
-            console.print("[green]unzip utility installed successfully![/green]")
-        except subprocess.CalledProcessError as e:
-            console.print(f"[red]Failed to install unzip: {str(e)}[/red]")
-            sys.exit(1)
-        except Exception as e:
-            console.print(f"[red]Error installing unzip: {str(e)}[/red]")
-            sys.exit(1)
-
-
-def install_aws_cli() -> None:
-    """Install AWS CLI based on the operating system."""
-    os_type = get_os_type()
-    console.print(f"[yellow]Installing AWS CLI for {os_type}...[/yellow]")
-
-    # Create a temporary directory in the user's home directory
-    home_dir = get_home_dir()
-    temp_dir = os.path.join(home_dir, ".aws-cli-temp")
-    os.makedirs(temp_dir, exist_ok=True)
-
-    try:
-        if os_type == "macos":
-            # Install using the official pkg installer for macOS
-            console.print("[cyan]Downloading AWS CLI installer for macOS...[/cyan]")
-            installer_path = os.path.join(temp_dir, "AWSCLIV2.pkg")
-            subprocess.run(
-                [
-                    "curl",
-                    "https://awscli.amazonaws.com/AWSCLIV2.pkg",
-                    "-o",
-                    installer_path,
-                    "-s",
-                ],
-                check=True,
-            )
-
-            console.print("[cyan]Installing AWS CLI...[/cyan]")
-            subprocess.run(
-                ["sudo", "installer", "-pkg", installer_path, "-target", "/"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-            )
-
-        elif os_type == "ubuntu" or os_type == "fedora" or os_type == "linux":
-            # Install using the official method for Linux
-            console.print("[cyan]Installing AWS CLI for Linux...[/cyan]")
-
-            # Check and install unzip if needed
-            check_and_install_unzip()
-
-            # Download the installation file
-            zip_path = os.path.join(temp_dir, "awscliv2.zip")
-            subprocess.run(
-                [
-                    "curl",
-                    "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip",
-                    "-o",
-                    zip_path,
-                    "-s",
-                ],
-                check=True,
-            )
-
-            # Unzip the installer
-            subprocess.run(["unzip", "-q", zip_path, "-d", temp_dir], check=True)
-
-            # Run the install program
-            subprocess.run(
-                ["sudo", "./aws/install"],
-                cwd=temp_dir,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-            )
-
-        elif os_type == "windows":
-            # Install using the official MSI installer for Windows
-            console.print("[cyan]Downloading AWS CLI installer for Windows...[/cyan]")
-
-            # Download the MSI installer
-            installer_path = os.path.join(temp_dir, "AWSCLIV2.msi")
-            subprocess.run(
-                [
-                    "curl",
-                    "https://awscli.amazonaws.com/AWSCLIV2.msi",
-                    "-o",
-                    installer_path,
-                    "-s",
-                ],
-                check=True,
-            )
-
-            # Run the MSI installer
-            console.print("[cyan]Installing AWS CLI...[/cyan]")
-            subprocess.run(
-                ["msiexec", "/i", installer_path, "/quiet"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-            )
-
-        console.print("[green]AWS CLI installed successfully![/green]")
-
-        # Verify installation
-        try:
-            result = subprocess.run(
-                ["aws", "--version"], capture_output=True, text=True, check=True
-            )
-            console.print(f"[green]AWS CLI version: {result.stdout.strip()}[/green]")
-        except subprocess.CalledProcessError:
-            console.print(
-                "[yellow]AWS CLI installed but version check failed. You may need to restart your terminal.[/yellow]"
-            )
-
-    except subprocess.CalledProcessError as e:
-        console.print(f"[red]Failed to install AWS CLI: {str(e)}[/red]")
-        sys.exit(1)
-    except Exception as e:
-        console.print(f"[red]Error installing AWS CLI: {str(e)}[/red]")
-        sys.exit(1)
-    finally:
-        # Clean up temporary directory
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-def check_aws_cli() -> bool:
-    """Check if AWS CLI is installed."""
-    return shutil.which("aws") is not None
-
-
-def check_aws_credentials() -> bool:
-    """Check if AWS credentials are properly configured."""
-    try:
-        result = subprocess.run(
-            ["aws", "sts", "get-caller-identity"], capture_output=True, text=True
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
 
 
 def load_environment() -> None:
@@ -342,28 +111,41 @@ def format_size(size_bytes: int) -> str:
 
 
 def sync_s3_to_local(s3_path: str, local_path: str) -> None:
-    """Sync S3 path to local directory with progress tracking."""
+    """Sync S3 path to local directory with progress tracking using boto3."""
     try:
         # Create local directory if it doesn't exist
         os.makedirs(local_path, exist_ok=True)
 
-        # First, get the list of objects to sync
+        # Parse S3 path
+        bucket, prefix = parse_s3_path(s3_path)
+
+        # Initialize S3 client
+        s3_client = boto3.client("s3")
+
+        # List all objects in the S3 path
         console.print("[cyan]Listing objects in S3 path...[/cyan]")
-        list_cmd = ["aws", "s3", "ls", s3_path, "--recursive"]
-        result = subprocess.run(list_cmd, capture_output=True, text=True, check=True)
+        paginator = s3_client.get_paginator("list_objects_v2")
 
-        # Parse the list of objects and their sizes
-        objects = []
+        # Use empty string instead of None for prefix
+        list_kwargs = {"Bucket": bucket}
+        if prefix is not None:
+            list_kwargs["Prefix"] = prefix
+
+        pages = paginator.paginate(**list_kwargs)
+
+        # Get total size and count of objects
         total_size = 0
-        for line in result.stdout.splitlines():
-            parts = line.split()
-            if len(parts) >= 4:
-                size = int(parts[2])
-                name = " ".join(parts[3:])
-                objects.append((name, size))
-                total_size += size
+        total_objects = 0
+        objects = []
 
-        total_objects = len(objects)
+        for page in pages:
+            if "Contents" in page:
+                for obj in page["Contents"]:
+                    size = obj["Size"]
+                    key = obj["Key"]
+                    total_size += size
+                    total_objects += 1
+                    objects.append((key, size))
 
         if total_objects == 0:
             console.print("[yellow]No objects found in the specified S3 path.[/yellow]")
@@ -373,79 +155,73 @@ def sync_s3_to_local(s3_path: str, local_path: str) -> None:
             f"[cyan]Found {total_objects} objects to sync (total size: {format_size(total_size)})[/cyan]"
         )
 
-        # Initialize progress tracking with a simple progress bar
+        # Initialize progress tracking
         with Progress(
             TextColumn("[bold blue]{task.description}"),
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("•"),
+            TransferSpeedColumn(),
+            TextColumn("•"),
+            TextColumn("[cyan]{task.fields[filename]}"),
             console=console,
         ) as progress:
-            # Create a task with a total of 100 for percentage tracking
-            task = progress.add_task("[cyan]Syncing files...", total=100)
-
-            # Use aws s3 sync command
-            sync_cmd = ["aws", "s3", "sync", s3_path, local_path, "--no-progress"]
-
-            # Run the sync command
-            process = subprocess.Popen(
-                sync_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                universal_newlines=True,
+            # Create a task for overall progress
+            task = progress.add_task(
+                "[cyan]Syncing files...", total=total_size, filename=""
             )
 
-            # Monitor the sync process
-            start_time = time.time()
-            files_completed = 0
+            # Download each object
+            for key, size in objects:
+                # Calculate local path for the object
+                relative_path = key[len(prefix) :] if prefix else key
+                local_file_path = os.path.join(local_path, relative_path)
 
-            while True:
-                # Check if process has finished
-                if process.poll() is not None:
-                    break
+                # Ensure the parent directory exists
+                parent_dir = os.path.dirname(local_file_path)
+                if parent_dir:
+                    try:
+                        # First, check if the parent directory exists and is a file
+                        if os.path.exists(parent_dir) and not os.path.isdir(parent_dir):
+                            # Create a unique backup path
+                            backup_path = f"{parent_dir}.{os.urandom(4).hex()}.bak"
+                            os.rename(parent_dir, backup_path)
+                            console.print(
+                                f"[yellow]Renamed conflicting file to {backup_path}[/yellow]"
+                            )
 
-                # Count completed files by checking local directory
-                # This is an approximation since we can't get real-time progress from aws s3 sync
-                local_files = 0
-                for root, _, files in os.walk(local_path):
-                    for file in files:
-                        local_files += 1
+                        # Now create the directory
+                        os.makedirs(parent_dir, exist_ok=True)
+                    except OSError as e:
+                        console.print(
+                            f"[red]Error creating directory {parent_dir}: {str(e)}[/red]"
+                        )
+                        continue
 
-                # Calculate progress based on completed files
-                if total_objects > 0:
-                    progress_value = min(95, int((local_files / total_objects) * 100))
-                else:
-                    progress_value = 0
+                # Update progress with current filename
+                progress.update(task, filename=os.path.basename(key))
 
-                # Update progress
-                progress.update(task, completed=progress_value)
-
-                # Sleep briefly to avoid excessive CPU usage
-                time.sleep(0.5)
-
-            # Get the return code and any error output
-            return_code = process.wait()
-            _, stderr = process.communicate()
-
-            # Check for errors
-            if return_code != 0:
-                console.print(f"[red]Error during sync: {stderr}[/red]")
-                sys.exit(1)
+                # Download the object with progress tracking
+                try:
+                    s3_client.download_file(
+                        bucket,
+                        key,
+                        local_file_path,
+                        Callback=lambda bytes_transferred: progress.update(
+                            task, advance=bytes_transferred
+                        ),
+                    )
+                except Exception as e:
+                    console.print(f"[red]Error downloading {key}: {str(e)}[/red]")
+                    continue
 
             # Mark progress as complete
-            progress.update(task, completed=100)
+            progress.update(task, completed=total_size, filename="")
 
-        # Calculate and display final statistics
-        end_time = time.time()
-        total_time = end_time - start_time
+        console.print("[green]Sync completed successfully![/green]")
 
-        console.print(
-            f"[green]Sync completed successfully in {total_time:.2f} seconds![/green]"
-        )
-
-    except subprocess.CalledProcessError as e:
-        console.print(f"[red]Error during sync: {e.stderr}[/red]")
+    except ClientError as e:
+        console.print(f"[red]AWS Error: {str(e)}[/red]")
         sys.exit(1)
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
@@ -456,19 +232,9 @@ def main():
     # Request sudo privileges if not already running as root
     run_with_sudo()
 
-    # Check for AWS CLI and install if needed
-    if not check_aws_cli():
-        console.print("[yellow]AWS CLI not found. Installing...[/yellow]")
-        install_aws_cli()
-
     # Load environment variables
     load_environment()
     validate_aws_credentials()
-
-    # Check AWS credentials
-    if not check_aws_credentials():
-        console.print("[red]AWS credentials are not properly configured[/red]")
-        sys.exit(1)
 
     # Get S3 path and local path from command line arguments
     if len(sys.argv) != 3:
